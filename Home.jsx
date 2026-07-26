@@ -1,170 +1,279 @@
-import React, { useEffect, useState } from "react";
-import { Dial, Field, Loading, Err, ToolHead, TENNIS, INK } from "./ui.jsx";
-import { QUIZ } from "../data/quiz.js";
-import { runAdoptQuiz, fetchRoster } from "../lib/api.js";
+import React, { useState } from "react";
+import { Dial, Bar, Field, PhotoPicker, Loading, Err, ToolHead, SEARCH } from "./ui.jsx";
+import { ANIMAL_TYPES } from "../data/quiz.js";
+import { createReport, runMatch } from "../lib/api.js";
+import { resizePhoto } from "../lib/image.js";
 
-export default function Adopt() {
-  const [roster, setRoster] = useState([]);
-  const [step, setStep] = useState(-1);
-  const [answers, setAnswers] = useState({});
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
+const BLANK = { name: "", animal_type: "Dog", location: "", event_date: "", description: "", contact: "" };
+
+export default function LostFound({ reports, onNewReport }) {
+  const [tab, setTab] = useState("lost");
+  const [form, setForm] = useState(BLANK);
+  const [photo, setPhoto] = useState(null); // { base64, previewUrl }
+  const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [result, setResult] = useState(null);
+  const [results, setResults] = useState(null);
+  const [filed, setFiled] = useState(null);
 
-  useEffect(() => {
-    fetchRoster().then(setRoster).catch(() => setRoster([]));
-  }, []);
+  const isLost = tab === "lost";
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const total = QUIZ.length;
-  const q = step >= 0 && step < total ? QUIZ[step] : null;
-
-  const choose = (opt) => {
-    setAnswers({ ...answers, [QUIZ[step].key]: opt });
-    setTimeout(() => setStep((s) => s + 1), 140);
+  const reset = () => {
+    setForm(BLANK); setPhoto(null); setResults(null); setFiled(null); setErr("");
   };
 
-  const run = async () => {
-    setBusy(true);
+  const pickPhoto = async (file) => {
     setErr("");
     try {
-      // Send the questions as text so the server sees what was actually asked.
-      const asked = Object.fromEntries(QUIZ.map((x) => [x.q, answers[x.key]]));
-      setResult(await runAdoptQuiz(asked, note));
-      setStep(total);
+      setPhoto(await resizePhoto(file));
     } catch (e) {
       setErr(e.message);
-    } finally {
-      setBusy(false);
     }
   };
 
-  const restart = () => {
-    setStep(-1); setAnswers({}); setNote(""); setResult(null); setErr("");
+  const submit = async () => {
+    setErr("");
+    if (!form.location.trim() || !form.description.trim()) {
+      setErr("Add the location and a description. Both do real work in the match.");
+      return;
+    }
+    if (isLost && !form.name.trim()) {
+      setErr("Add the pet's name so the case card reads properly.");
+      return;
+    }
+
+    setResults(null);
+    try {
+      setBusy(photo ? "Uploading the photo and filing the report" : "Filing the report");
+      const record = await createReport({
+        ...form,
+        kind: tab,
+        name: isLost ? form.name.trim() : null,
+        photo_base64: photo?.base64 ?? null,
+      });
+      onNewReport(record);
+      setFiled(record);
+
+      setBusy("Comparing coats, markings, distance, and timeline");
+      setResults(await runMatch(record.id));
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy("");
+    }
   };
+
+  const otherSide = reports.filter(
+    (r) => r.kind === (isLost ? "found" : "lost") && r.animal_type === form.animal_type
+  ).length;
 
   return (
     <div>
       <ToolHead
-        color={TENNIS}
-        eyebrow="Tool two"
-        title="Adoption compatibility"
-        lede="A dog that looks perfect on a kennel card can be the wrong dog for your Tuesday. Answer nine questions about how you actually live, and PawLink ranks the animals in our partner shelters against it, with the reasons written out."
+        color={SEARCH}
+        eyebrow="Tool one"
+        title={<>Lost <span className="amp">+</span> Found matching</>}
+        lede="Roughly 10 million pets go missing in the United States every year. Two people usually hold the answer between them and never meet. PawLink reads both reports, compares the animals feature by feature, and puts a number on it."
       />
 
-      {step === -1 && (
-        <div className="card wide">
-          <span className="mono stamp">NINE QUESTIONS, ABOUT TWO MINUTES</span>
-          <p className="lede-sm">
-            No question is about what breed you like the look of. Every question is about hours, space, noise,
-            and patience, because that is what an animal actually lives inside of.
-          </p>
-          <div className="roster">
-            {roster.map((p) => (
-              <span key={p.id} className="chip">{p.name} <em>{p.species}</em></span>
-            ))}
-          </div>
-          <button className="btn" style={{ background: TENNIS, borderColor: INK, color: INK }} onClick={() => setStep(0)}>
-            Start the quiz
+      <div className="tabs">
+        {[["lost", "File a lost pet report"], ["found", "File a found pet report"], ["board", "Case board"]].map(([k, l]) => (
+          <button
+            key={k}
+            className={`tab${tab === k ? " on" : ""}`}
+            style={tab === k ? { background: SEARCH, borderColor: SEARCH, color: "#FBFCFA" } : null}
+            onClick={() => { setTab(k); if (k !== "board") reset(); }}
+          >
+            {l}
           </button>
-        </div>
-      )}
+        ))}
+      </div>
 
-      {q && (
-        <div className="card wide">
-          <div className="quiz-top">
-            <span className="mono stamp">
-              Q{String(step + 1).padStart(2, "0")} <em>/ {String(total).padStart(2, "0")}</em>
-            </span>
-            <span className="prog">
-              <span className="prog-f" style={{ width: `${(step / total) * 100}%`, background: TENNIS }} />
-            </span>
-          </div>
-
-          <h3 className="quiz-q">{q.q}</h3>
-
-          <div className="opts">
-            {q.opts.map((o) => (
-              <button
-                key={o}
-                className="opt"
-                style={answers[q.key] === o ? { borderColor: INK, background: TENNIS } : null}
-                onClick={() => choose(o)}
-              >
-                {o}
-              </button>
-            ))}
-          </div>
-
-          {step > 0 && (
-            <button className="btn btn-ghost sm" onClick={() => setStep(step - 1)}>Back</button>
-          )}
-        </div>
-      )}
-
-      {step === total && !result && (
-        <div className="card wide">
-          <span className="mono stamp">LAST THING, OPTIONAL</span>
-          <Field label="Anything the questions missed?" hint="allergies, travel, a landlord rule, a past pet">
-            <textarea
-              className="in ta"
-              rows={4}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="I travel one weekend a month and my building has a 30 lb limit."
-            />
-          </Field>
-          <Err msg={err} />
-          {busy ? (
-            <Loading text="Weighing energy, hours alone, experience, household" color={TENNIS} />
-          ) : (
-            <div className="row">
-              <button className="btn" style={{ background: TENNIS, borderColor: INK, color: INK }} onClick={run}>
-                Find my matches
-              </button>
-              <button className="btn btn-ghost" onClick={() => setStep(total - 1)}>Back</button>
+      {tab === "board" ? (
+        <CaseBoard reports={reports} />
+      ) : (
+        <div className="grid-2">
+          <div className="card">
+            <div className="card-top">
+              <span className="mono stamp" style={{ color: SEARCH }}>
+                {isLost ? "LOST PET REPORT" : "FOUND PET REPORT"}
+              </span>
+              <span className="mono tiny">
+                {otherSide} matching {isLost ? "found" : "lost"} report{otherSide === 1 ? "" : "s"} on file
+              </span>
             </div>
-          )}
-        </div>
-      )}
 
-      {result && (
-        <div>
-          <div className="card wide topcard">
-            <span className="mono stamp">BEST MATCH</span>
-            <p className="lede-sm">{result.summary}</p>
-          </div>
+            <PhotoPicker
+              preview={photo?.previewUrl}
+              onPick={pickPhoto}
+              color={SEARCH}
+              label={isLost ? "Upload a photo of your pet" : "Upload a photo of the pet you found"}
+            />
 
-          <div className="grid-2">
-            {(result.matches || []).map((m) => (
-              <div
-                key={m.id}
-                className="match"
-                style={m.id === result.topPick ? { borderColor: INK, borderWidth: 2 } : null}
+            {isLost && (
+              <Field label="Pet name">
+                <input className="in" value={form.name} onChange={set("name")} placeholder="Biscuit" />
+              </Field>
+            )}
+
+            <Field label="Animal type">
+              <select className="in" value={form.animal_type} onChange={set("animal_type")}>
+                {ANIMAL_TYPES.map((t) => <option key={t}>{t}</option>)}
+              </select>
+            </Field>
+
+            <Field label={isLost ? "Last seen location" : "Location found"} hint="street, park, cross streets">
+              <input
+                className="in"
+                value={form.location}
+                onChange={set("location")}
+                placeholder={isLost ? "Halston Park, near the ballfields" : "Elm Street, by the school"}
+              />
+            </Field>
+
+            <Field label={isLost ? "Date missing" : "Date found"}>
+              <input className="in" type="date" value={form.event_date} onChange={set("event_date")} />
+            </Field>
+
+            <Field label={isLost ? "Description" : "Observations and description"} hint="color, markings, size, collar, behavior">
+              <textarea
+                className="in ta"
+                rows={5}
+                value={form.description}
+                onChange={set("description")}
+                placeholder={isLost
+                  ? "Reddish-tan short coat, white blaze on the chest, floppy ears, about 45 lb. Blue collar, no tags. Scared of bikes."
+                  : "Reddish-tan short coat, white patch on chest, floppy ears, medium build. Faded blue collar. Nervous but let me leash him."}
+              />
+            </Field>
+
+            <Field label="Contact" hint="optional, shown on your case card">
+              <input className="in" value={form.contact} onChange={set("contact")} placeholder="555 0143 or you@email.com" />
+            </Field>
+
+            <Err msg={err} />
+            <div className="row">
+              <button
+                className="btn"
+                style={{ background: SEARCH, borderColor: SEARCH }}
+                onClick={submit}
+                disabled={Boolean(busy)}
               >
-                <div className="match-head">
-                  <Dial pct={Math.round(m.compatibility)} color={TENNIS} />
-                  <div>
-                    {m.id === result.topPick && (
-                      <span className="pill" style={{ background: TENNIS, color: INK }}>Top pick</span>
-                    )}
-                    <h4>{m.pet.name}</h4>
-                    <p className="mono tiny">
-                      {m.pet.breed} • {m.pet.age} • {m.pet.weight} • {m.pet.energy} energy
-                    </p>
-                    <p className="mono tiny">{m.pet.shelter}</p>
-                  </div>
-                </div>
-                <p className="reason">{m.pet.profile}</p>
-                <p className="fit"><strong>Why it fits you.</strong> {m.fit}</p>
-                <p className="next mono">WORTH KNOWING → {m.watch}</p>
-              </div>
-            ))}
+                {busy ? "Working" : isLost ? "File report and search found pets" : "File report and search lost pets"}
+              </button>
+              <button className="btn btn-ghost" onClick={reset} disabled={Boolean(busy)}>Clear</button>
+            </div>
           </div>
 
-          <button className="btn btn-ghost" onClick={restart}>Take the quiz again</button>
+          <div>
+            {busy && <Loading text={busy} color={SEARCH} />}
+
+            {!busy && results === null && (
+              <div className="empty">
+                <p className="mono stamp" style={{ color: SEARCH }}>WHAT THE MATCH LOOKS AT</p>
+                <ul className="ticks">
+                  <li>Coat color and where it changes</li>
+                  <li>Markings: blaze, socks, mask, saddle, spots</li>
+                  <li>Size and build against the reported weight</li>
+                  <li>Breed-typical features: ear set, muzzle, coat length</li>
+                  <li>Distance between the two locations</li>
+                  <li>Whether the dates make sense for one animal on foot</li>
+                </ul>
+                <p className="tiny">
+                  Every candidate comes back with a number, a plain-language reason, and one thing to check next.
+                  A high score is a lead, never a confirmation. Always confirm identity in person.
+                </p>
+              </div>
+            )}
+
+            {!busy && results?.length === 0 && (
+              <div className="empty">
+                <p className="mono stamp" style={{ color: SEARCH }}>REPORT FILED, NO CANDIDATES YET</p>
+                <p>
+                  Case {filed?.case_id} is open on the board. No {isLost ? "found" : "lost"} reports for that
+                  animal type are up yet. The moment one is filed, it gets compared against yours.
+                </p>
+              </div>
+            )}
+
+            {!busy && results?.length > 0 && (
+              <div className="results">
+                <p className="mono stamp" style={{ color: SEARCH }}>
+                  CASE {filed?.case_id} • {results.length} CANDIDATE{results.length === 1 ? "" : "S"}
+                </p>
+                {results.map((m) => (
+                  <div key={m.id} className="match">
+                    <div className="match-head">
+                      <Dial pct={Math.round(m.similarity)} color={SEARCH} />
+                      <div>
+                        <span className="pill" style={{ background: SEARCH }}>{m.verdict}</span>
+                        <h4>{m.record.case_id}</h4>
+                        <p className="mono tiny">
+                          {m.record.kind === "found" ? "Found" : "Last seen"} at {m.record.location} • {fmt(m.record.event_date)}
+                        </p>
+                      </div>
+                    </div>
+
+                    {m.record.photo_url && (
+                      <img className="match-shot" src={m.record.photo_url} alt="The reported pet" loading="lazy" />
+                    )}
+
+                    <div className="bars">
+                      <Bar label="Color" value={m.breakdown?.color} color={SEARCH} />
+                      <Bar label="Markings" value={m.breakdown?.pattern} color={SEARCH} />
+                      <Bar label="Size and build" value={m.breakdown?.size} color={SEARCH} />
+                      <Bar label="Breed features" value={m.breakdown?.breed} color={SEARCH} />
+                      <Bar label="Distance" value={m.breakdown?.distance} color={SEARCH} />
+                      <Bar label="Timeline" value={m.breakdown?.timeline} color={SEARCH} />
+                    </div>
+
+                    <p className="reason">{m.reasoning}</p>
+                    {m.record.contact && (
+                      <p className="tiny">Contact on this report: {m.record.contact}</p>
+                    )}
+                    <p className="next mono">CHECK NEXT → {m.checkNext}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Postgres returns dates as ISO strings. Show the day, not the timestamp. */
+function fmt(d) {
+  return d ? String(d).slice(0, 10) : "no date";
+}
+
+function CaseBoard({ reports }) {
+  const Column = ({ title, list, empty }) => (
+    <div>
+      <p className="mono stamp" style={{ color: SEARCH }}>{title} • {list.length}</p>
+      {list.length === 0 && <div className="empty"><p>{empty}</p></div>}
+      {list.map((r) => (
+        <article key={r.id} className="case">
+          <div className="case-hole" />
+          {r.photo_url
+            ? <img src={r.photo_url} alt="" className="case-shot" loading="lazy" />
+            : <div className="case-shot noshot mono">NO PHOTO</div>}
+          <div className="case-body">
+            <span className="mono tiny">{r.case_id} • {r.animal_type} • {fmt(r.event_date)}</span>
+            <h4>{r.name || (r.kind === "found" ? "Unidentified" : "Unnamed")}</h4>
+            <p className="tiny">{r.location}</p>
+            <p className="case-desc">{r.description}</p>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="grid-2">
+      <Column title="LOST" list={reports.filter((r) => r.kind === "lost")} empty="No lost reports filed yet." />
+      <Column title="FOUND" list={reports.filter((r) => r.kind === "found")} empty="No found reports filed yet." />
     </div>
   );
 }

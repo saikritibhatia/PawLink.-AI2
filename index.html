@@ -1,20 +1,29 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PawLink AI — Helping pets find their way home, and stay healthy for life</title>
-    <meta name="description" content="Lost and found pet matching, adoption compatibility, and a symptom guide. Three AI tools for the three moments that matter." />
-    <meta property="og:title" content="PawLink AI" />
-    <meta property="og:description" content="Helping pets find their way home, and stay healthy for life." />
-    <meta property="og:type" content="website" />
-    <link rel="icon" href="/paw.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Karla:ital,wght@0,400;0,600;0,800;1,400&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="./src/main.jsx"></script>
-  </body>
-</html>
+/**
+ * Best-effort limiter. State lives in the memory of one warm serverless instance,
+ * so a busy site with many instances will let a little more through than the
+ * number below suggests. It is enough to stop a bored person with a loop.
+ *
+ * For a real ceiling, move this to Upstash Redis (@upstash/ratelimit) once the
+ * site has traffic worth protecting. The interface below stays the same.
+ */
+const WINDOW_MS = 10 * 60 * 1000;
+const MAX_CALLS = 20;
+const hits = new Map();
+
+export function clientIp(req) {
+  const fwd = req.headers["x-forwarded-for"];
+  if (typeof fwd === "string" && fwd.length) return fwd.split(",")[0].trim();
+  return req.socket?.remoteAddress || "unknown";
+}
+
+/** Returns true when the caller is over the line. */
+export function overLimit(ip) {
+  const now = Date.now();
+  const recent = (hits.get(ip) || []).filter((t) => now - t < WINDOW_MS);
+  recent.push(now);
+  hits.set(ip, recent);
+
+  if (hits.size > 5000) hits.clear(); // crude memory guard
+
+  return recent.length > MAX_CALLS;
+}

@@ -1,35 +1,35 @@
-import { randomUUID } from "node:crypto";
-
-const COOKIE = "pawlink_id";
-const YEAR = 60 * 60 * 24 * 365;
+const MAX_BYTES = 900 * 1024;
+const OK_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 /**
- * Identity without an auth provider.
- *
- * The server hands each visitor a random id in an httpOnly cookie. It is what
- * scopes private pet profiles: you can only read the profiles created under
- * your own cookie. Nobody signs up, nobody picks a password, and there is no
- * third service to configure.
- *
- * The trade: clear your cookies and your health profiles are gone. That is the
- * right call for a lost-pet site people use once in a panic, but if you ever
- * want accounts that survive a new phone, this is the one file to replace.
+ * Only fetch photos we host on Vercel Blob. Without this check the endpoint
+ * would fetch any URL a caller handed it, which is a server-side request
+ * forgery hole: someone could point it at an internal address and read the reply.
  */
-export function getDeviceId(req, res) {
-  const jar = Object.fromEntries(
-    (req.headers.cookie || "")
-      .split(";")
-      .map((c) => c.trim().split("="))
-      .filter((p) => p.length === 2)
-  );
+function ours(url) {
+  try {
+    return new URL(url).host.endsWith(".public.blob.vercel-storage.com");
+  } catch {
+    return false;
+  }
+}
 
-  const existing = jar[COOKIE];
-  if (existing && /^[0-9a-f-]{36}$/i.test(existing)) return existing;
+/** An Anthropic image content block, or null if the photo is unusable. */
+export async function imageBlock(url) {
+  if (!url || !ours(url)) return null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
 
-  const id = randomUUID();
-  res.setHeader(
-    "Set-Cookie",
-    `${COOKIE}=${id}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${YEAR}`
-  );
-  return id;
+    const type = (res.headers.get("content-type") || "").split(";")[0].trim();
+    if (!OK_TYPES.includes(type)) return null;
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength > MAX_BYTES) return null;
+
+    return { type: "image", source: { type: "base64", media_type: type, data: buf.toString("base64") } };
+  } catch (e) {
+    console.error("photo fetch failed", e.message);
+    return null;
+  }
 }
